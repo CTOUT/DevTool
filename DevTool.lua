@@ -1,9 +1,110 @@
 -- DevTool is a World of Warcraft® addon development tool.
--- Copyright (c) 2021-2025 Britt W. Yazel
+-- Copyright (c) 2021-2023 Britt W. Yazel
 -- Copyright (c) 2016-2021 Peter aka "Varren"
 -- This code is licensed under the MIT license (see LICENSE for details)
 
 local _, addonTable = ... --make use of the default addon namespace
+
+-- ============================================================================
+-- WotLK Compatibility Shim (Ascension 3.3.5)
+-- ============================================================================
+-- CreateColorFromHexString() was added in Patch 8.2 (BfA) and doesn't exist in WotLK
+-- However, Ascension may have added a partial implementation - wrap it to add missing methods
+local OriginalCreateColorFromHexString = CreateColorFromHexString
+
+---@param hexColor string Hex color string in format "AARRGGBB" or "RRGGBB"
+---@return table color Color object with r, g, b, a fields (0-1 range) and ColorMixin methods
+function CreateColorFromHexString(hexColor)
+    local color
+    
+    if OriginalCreateColorFromHexString then
+        -- Ascension has a version, but it might not have all methods
+        color = OriginalCreateColorFromHexString(hexColor)
+        -- FORCE add all ColorMixin methods (Ascension's version is incomplete)
+        color.GetRGBA = ColorMixin.GetRGBA
+        color.GetRGB = ColorMixin.GetRGB
+        color.SetRGBA = ColorMixin.SetRGBA
+        color.WrapTextInColorCode = ColorMixin.WrapTextInColorCode
+    else
+        -- WotLK doesn't have it, create from scratch
+        hexColor = hexColor:gsub("^0x", ""):gsub("^#", "")
+        
+        local r, g, b, a
+        if #hexColor == 8 then
+            a = tonumber(hexColor:sub(1, 2), 16) / 255
+            r = tonumber(hexColor:sub(3, 4), 16) / 255
+            g = tonumber(hexColor:sub(5, 6), 16) / 255
+            b = tonumber(hexColor:sub(7, 8), 16) / 255
+        elseif #hexColor == 6 then
+            a = 1.0
+            r = tonumber(hexColor:sub(1, 2), 16) / 255
+            g = tonumber(hexColor:sub(3, 4), 16) / 255
+            b = tonumber(hexColor:sub(5, 6), 16) / 255
+        else
+            r, g, b, a = 1, 1, 1, 1
+        end
+        
+        color = CreateColor(r, g, b, a)
+    end
+    
+    return color
+end
+
+-- Make it globally available (replace existing)
+_G.CreateColorFromHexString = CreateColorFromHexString
+
+-- WotLK Color Compatibility: Define ColorMixin methods that don't exist in 3.3.5
+local ColorMixin = {}
+
+function ColorMixin:GetRGBA()
+    return self.r, self.g, self.b, self.a
+end
+
+function ColorMixin:GetRGB()
+    return self.r, self.g, self.b
+end
+
+function ColorMixin:SetRGBA(r, g, b, a)
+    self.r = r
+    self.g = g
+    self.b = b
+    self.a = a or 1
+end
+
+function ColorMixin:WrapTextInColorCode(text)
+    return string.format("|c%02x%02x%02x%02x%s|r",
+        math.floor((self.a or 1) * 255),
+        math.floor((self.r or 0) * 255),
+        math.floor((self.g or 0) * 255),
+        math.floor((self.b or 0) * 255),
+        text)
+end
+
+-- CreateColor() was added in Patch 8.0 (BfA) and doesn't exist in WotLK
+if not CreateColor then
+    ---@param r number Red component (0-1)
+    ---@param g number Green component (0-1)
+    ---@param b number Blue component (0-1)
+    ---@param a number? Alpha component (0-1), defaults to 1.0
+    ---@return table color Color object with r, g, b, a fields and ColorMixin methods
+    function CreateColor(r, g, b, a)
+        local color = {
+            r = r or 0,
+            g = g or 0,
+            b = b or 0,
+            a = a or 1
+        }
+        -- Add all ColorMixin methods
+        for k, v in pairs(ColorMixin) do
+            color[k] = v
+        end
+        return color
+    end
+    
+    -- Make it globally available
+    _G.CreateColor = CreateColor
+end
+-- ============================================================================
 
 ---@class DevTool : AceAddon-3.0 @define The main addon object for the DevTool addon
 addonTable.DevTool = LibStub("AceAddon-3.0"):NewAddon("DevTool", "AceConsole-3.0", "AceEvent-3.0", "AceHook-3.0", "AceTimer-3.0")
@@ -24,6 +125,17 @@ DevTool.colors["parent"] = CreateColorFromHexString("FFBEB9B5")
 DevTool.colors["error"] = CreateColorFromHexString("FFFF0000")
 DevTool.colors["ok"] = CreateColorFromHexString("FF00FF00")
 
+-- WotLK 3.3.5 Compatibility: Patch all color objects to add missing methods
+-- This is needed because Ascension's CreateColorFromHexString doesn't include WrapTextInColorCode
+for _, color in pairs(DevTool.colors) do
+	if color and not color.WrapTextInColorCode then
+		color.GetRGBA = ColorMixin.GetRGBA
+		color.GetRGB = ColorMixin.GetRGB
+		color.SetRGBA = ColorMixin.SetRGBA
+		color.WrapTextInColorCode = ColorMixin.WrapTextInColorCode
+	end
+end
+
 -- Holds the contents of the current view window.
 DevTool.list = {}
 
@@ -37,14 +149,14 @@ DevTool.list = {}
 function DevTool:OnInitialize()
 
 	self.db = LibStub("AceDB-3.0"):New("DevToolDatabase", self.DatabaseDefaults)
-
+	
 end
 
 --- Called during the PLAYER_LOGIN event when most of the data provided by the game is already present.
 --- We perform more startup tasks here, such as registering events, hooking functions, creating frames, or getting 
 --- information from the game that wasn't yet available during :OnInitialize()
 function DevTool:OnEnable()
-
+	
 	self:CreateChatCommands()
 
 	self.MainWindow = CreateFrame("Frame", "DevToolFrame", UIParent, "DevToolMainFrame")
@@ -146,14 +258,8 @@ function DevTool:CreateChatCommands()
 		end,
 
 		MOUSEOVER = function()
-			local focusedFrame
-			--WoW 11.0 added GetMouseFoci() which now returns a table of frames in order of their on-screen stacking
-			if GetMouseFoci then
-				focusedFrame = GetMouseFoci()[1]
-			else
-				focusedFrame = GetMouseFocus()
-			end
-			return focusedFrame, focusedFrame:GetName()
+			local resultTable = GetMouseFocus()
+			return resultTable, resultTable:GetName()
 		end,
 
 		REPOSITION = function()
@@ -232,16 +338,6 @@ function DevTool:AddData(data, dataName)
 	-- If the data is nil, print an error and abort
 	if not data then
 		self:Print("Error: The data being added does not exist. Aborting.")
-		return
-	end
-
-	if issecrettable and issecrettable(data) then
-		self:Print("Error: The data being added is a secret table. Aborting.")
-		return
-	end
-
-	if issecretvalue and issecretvalue(data) then
-		self:Print("Error: The data being added is a secret value. Aborting.")
 		return
 	end
 
@@ -420,10 +516,6 @@ function DevTool:ResizeMainFrame()
 	local left = self.MainWindow:GetLeft()
 	local top = self.MainWindow:GetTop()
 
-	-- Pin the top left corner of the main window in place so we only resize from the bottom right corner
-	self.MainWindow:ClearAllPoints()
-	self.MainWindow:SetPoint("TOPLEFT", nil, "TOPLEFT", left, (-1 * (UIParent:GetHeight() - top)))
-
 	local x, y = GetCursorPosition()
 	local s = self.MainWindow:GetEffectiveScale()
 	x = x / s
@@ -431,16 +523,18 @@ function DevTool:ResizeMainFrame()
 
 	local minX, minY, maxX, maxY
 
-	if self.MainWindow.SetResizeBounds then
-		-- WoW 10.0
+	if self.MainWindow.GetResizeBounds then
+		-- WoW 10.0+
 		minX, minY, maxX, maxY = self.MainWindow:GetResizeBounds()
 	else
+		-- WotLK 3.3.5
 		maxX, maxY = self.MainWindow:GetMaxResize()
 		minX, minY = self.MainWindow:GetMinResize()
 
 	end
 
-	self.MainWindow:SetSize(DevTool.CalculatePosition(x - left, minX, maxX), DevTool.CalculatePosition(top - y, minY, maxY))
+	self.MainWindow:SetSize(DevTool.CalculatePosition(x - left, minX, maxX),
+			DevTool.CalculatePosition(top - y, minY, maxY))
 end
 
 function DevTool:ResizeColumn(firstRun)
@@ -457,8 +551,7 @@ function DevTool:ResizeColumn(firstRun)
 	end
 
 	self.MainWindow.columnResizer:ClearAllPoints()
-	-- -30 is vertical offset from above (top buttons)
-	self.MainWindow.columnResizer:SetPoint("TOPRIGHT", self.MainWindow, "TOPRIGHT", self.db.profile.collResizeWidth * -1, -30)
+	self.MainWindow.columnResizer:SetPoint("TOPRIGHT", self.MainWindow, "TOPRIGHT", self.db.profile.collResizeWidth * -1, -30) -- 30 is offset from above (top buttons)
 end
 
 -----------------------------------------------------------------------------------------------
@@ -513,8 +606,45 @@ end
 function DevTool:AddScrollFrameButtons(scrollFrame, strTemplate)
 	if not scrollFrame.ScrollBarHeight or scrollFrame:GetHeight() > scrollFrame.ScrollBarHeight then
 		scrollFrame.ScrollBarHeight = scrollFrame:GetHeight()
+		-- Ascension 3.3.5 Compatibility: Set default buttonHeight before HybridScrollFrame_CreateButtons
+		-- to prevent nil arithmetic error in HybridScrollFrame.lua:239
+		if not scrollFrame.buttonHeight then
+			-- Use db.profile if available, otherwise fallback to default 10
+			local fontSize = (self.db and self.db.profile and self.db.profile.fontSize) or 10
+			local cellHeight = fontSize + fontSize * 0.2
+			cellHeight = cellHeight % 2 == 0 and cellHeight or cellHeight + 1
+			scrollFrame.buttonHeight = cellHeight
+			-- CRITICAL: Also set on scrollBar to prevent SetValue error
+			if scrollFrame.scrollBar then
+				scrollFrame.scrollBar.buttonHeight = cellHeight
+				-- WotLK 3.3.5: scrollBar needs reference back to parent scrollFrame
+				scrollFrame.scrollBar.scrollFrame = scrollFrame
+				-- WotLK 3.3.5: scrollBar doesn't have SetVerticalScroll, delegate to parent
+				if not scrollFrame.scrollBar.SetVerticalScroll then
+					scrollFrame.scrollBar.SetVerticalScroll = function(sb, offset)
+						if sb.scrollFrame and sb.scrollFrame.SetVerticalScroll then
+							sb.scrollFrame:SetVerticalScroll(offset)
+						end
+					end
+				end
+			end
+		end
+		-- WotLK 3.3.5: Temporarily disable all callback scripts during initialization
+		local originalOnValueChanged = scrollFrame.scrollBar:GetScript("OnValueChanged")
+		scrollFrame.scrollBar:SetScript("OnValueChanged", nil)
+		
 		HybridScrollFrame_CreateButtons(scrollFrame, strTemplate, 0, -2)
-		scrollFrame.scrollBar:SetValue(scrollFrame.scrollBar:GetValue());
+		
+		-- WotLK 3.3.5: Wrap the callback to fix context issues
+		if originalOnValueChanged then
+			scrollFrame.scrollBar:SetScript("OnValueChanged", function(self, value, ...)
+				-- The callback expects scrollFrame as self, but receives scrollBar
+				-- Call it with scrollFrame as the first parameter instead
+				if self.scrollFrame then
+					originalOnValueChanged(self.scrollFrame, value, ...)
+				end
+			end)
+		end
 	end
 end
 
@@ -585,6 +715,30 @@ function DevTool:EnableSideBarTab(tabStrName)
 end
 
 function DevTool:UpdateSideBarUI()
+	-- Ascension 3.3.5 Compatibility: Ensure buttonHeight is set BEFORE AddScrollFrameButtons
+	-- This must happen before HybridScrollFrame_CreateButtons is called
+	if not self.MainWindow.sideFrame.sideScrollFrame.buttonHeight then
+		-- Use db.profile if available, otherwise fallback to default 10
+		local fontSize = (self.db and self.db.profile and self.db.profile.fontSize) or 10
+		local cellHeight = fontSize + fontSize * 0.2
+		cellHeight = cellHeight % 2 == 0 and cellHeight or cellHeight + 1
+		self.MainWindow.sideFrame.sideScrollFrame.buttonHeight = cellHeight
+		-- CRITICAL: Also set on scrollBar to prevent SetValue error
+		if self.MainWindow.sideFrame.sideScrollFrame.scrollBar then
+			self.MainWindow.sideFrame.sideScrollFrame.scrollBar.buttonHeight = cellHeight
+			-- WotLK 3.3.5: scrollBar needs reference back to parent scrollFrame
+			self.MainWindow.sideFrame.sideScrollFrame.scrollBar.scrollFrame = self.MainWindow.sideFrame.sideScrollFrame
+			-- WotLK 3.3.5: scrollBar doesn't have SetVerticalScroll, delegate to parent
+			if not self.MainWindow.sideFrame.sideScrollFrame.scrollBar.SetVerticalScroll then
+				self.MainWindow.sideFrame.sideScrollFrame.scrollBar.SetVerticalScroll = function(sb, offset)
+					if sb.scrollFrame and sb.scrollFrame.SetVerticalScroll then
+						sb.scrollFrame:SetVerticalScroll(offset)
+					end
+				end
+			end
+		end
+	end
+	
 	self:AddScrollFrameButtons(self.MainWindow.sideFrame.sideScrollFrame, "DevToolSideBarRowTemplate")
 
 	local offset = HybridScrollFrame_GetOffset(self.MainWindow.sideFrame.sideScrollFrame)
@@ -707,17 +861,12 @@ end
 
 function DevTool:TryCallFunction(info)
 	-- info.value is just our function to call
-	local parent = DevTool.GetParentTable(info)
+	local parent
 	local fn = info.value
 	local args = { unpack(self.db.profile.tArgs) }
 	for k, v in pairs(args) do
-		if type(v) == "string" and v == "t=self" then
-			if not parent then
-				local ok, results = false, { "t=self set as argument, but no parent table exists" }
-				return self:ProcessCallFunctionData(ok, info, parent, args, results)
-			end
-			args[k] = parent and parent.value
-		elseif type(v) == "string" and DevTool.starts(v, "t=") then
+		if type(v) == "string" and DevTool.starts(v, "t=") then
+
 			local obj = DevTool.FromStrToObject(string.sub(v, 3))
 			if obj then
 				args[k] = obj
@@ -728,10 +877,14 @@ function DevTool:TryCallFunction(info)
 	-- lets try safe call first
 	local ok, results = DevTool.TryCallFunctionWithArgs(fn, args)
 
-	if not ok and parent and args[1] ~= parent then
-		-- if safe call failed we probably could try to find self and call self:fn(), but only if user didn't explicitly specify t=self already
-		args = { parent.value, unpack(args) } --shallow copy and add parent table
-		ok, results = DevTool.TryCallFunctionWithArgs(fn, args)
+	if not ok then
+		-- if safe call failed we probably could try to find self and call self:fn()
+		parent = DevTool.GetParentTable(info)
+
+		if parent then
+			args = { parent.value, unpack(args) } --shallow copy and add parent table
+			ok, results = DevTool.TryCallFunctionWithArgs(fn, args)
+		end
 	end
 
 	self:ProcessCallFunctionData(ok, info, parent, args, results)
@@ -765,17 +918,16 @@ function DevTool:ProcessCallFunctionData(ok, info, parent, args, results)
 	-- for example 1, 2, nil, 4 should return only this 4 values nothing more, nothing less.
 	local found = false
 	for i = 10, 1, -1 do
-		local result = DevTool.normalizeSecretValue(results[i])
-		if result ~= nil then
+		if results[i] ~= nil then
 			found = true
 		end
 
 		if found or i == 1 then
 			-- if found some return or if return is nil
-			table.insert(elements, self:NewElement(result, string.format("  return: %d", i), indentation))
+			table.insert(elements, self:NewElement(results[i], string.format("  return: %d", i), indentation))
 
-			returnFormattedStr = string.format(" %s (%s)%s", tostring(result),
-					self.colors.lightblue:WrapTextInColorCode(type(result)), returnFormattedStr)
+			returnFormattedStr = string.format(" %s (%s)%s", tostring(results[i]),
+					self.colors.lightblue:WrapTextInColorCode(type(results[i])), returnFormattedStr)
 		end
 	end
 

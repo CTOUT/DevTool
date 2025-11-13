@@ -1,5 +1,5 @@
 <!-- DevTool is a World of Warcraft® addon development tool.
-     Copyright(c) 2021-2025 Britt W. Yazel
+     Copyright(c) 2021-2023 Britt W. Yazel
      Copyright (c) 2016-2021 Peter aka "Varren"
      This code is licensed under the MIT license (see LICENSE for details) -->
 
@@ -328,13 +328,18 @@ https://raw.githubusercontent.com/Gethe/wow-ui-source/live/Interface/FrameXML/UI
                         self:RegisterForDrag("LeftButton");
                     </OnLoad>
                     <OnDragStart>
+                        self:GetParent():ClearAllPoints()
+                        self:GetParent():SetPoint("TOPLEFT", nil, "TOPLEFT",
+                                self:GetParent():GetLeft(), (-1 * (UIParent:GetHeight() - self:GetParent():GetTop())))
                         self:SetButtonState("PUSHED", true);
                         self:GetHighlightTexture():Hide();
+
                         self.updateTimer = DevTool:ScheduleRepeatingTimer("ResizeUpdateTick", 0.01)
                     </OnDragStart>
                     <OnDragStop>
                         DevTool:CancelTimer(self.updateTimer)
-                        DevTool:ResizeUpdateTick() --call one final time to let go of the cursor
+                        --call one final time to let go of the cursor
+                        DevTool:ResizeUpdateTick()
                         self:SetButtonState("NORMAL", false);
                         self:GetHighlightTexture():Show();
                     </OnDragStop>
@@ -445,7 +450,22 @@ https://raw.githubusercontent.com/Gethe/wow-ui-source/live/Interface/FrameXML/UI
                 <Scripts>
                     <OnClick>
                         self.isActive = not self.isActive
-                        UIParentLoadAddOn("Blizzard_EventTrace");
+                        -- WotLK/Ascension: Try Ascension's EventTrace first, fallback to Blizzard version
+                        local loaded = UIParentLoadAddOn("Ascension_UIDevelopmentTools");
+                        if not loaded then
+                            loaded = UIParentLoadAddOn("Blizzard_EventTrace");
+                        end
+                        -- Toggle EventTrace - Ascension uses AscensionEventTrace frame
+                        if loaded then
+                            local frame = _G["AscensionEventTrace"] or EventTrace;
+                            if frame and type(frame) == "table" and frame.IsShown then
+                                if frame:IsShown() then
+                                    frame:Hide();
+                                else
+                                    frame:Show();
+                                end
+                            end
+                        end
                     </OnClick>
                 </Scripts>
             </Button>

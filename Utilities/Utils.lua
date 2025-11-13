@@ -1,5 +1,5 @@
 -- DevTool is a World of Warcraft® addon development tool.
--- Copyright (c) 2021-2025 Britt W. Yazel
+-- Copyright (c) 2021-2023 Britt W. Yazel
 -- Copyright (c) 2016-2021 Peter aka "Varren"
 -- This code is licensed under the MIT license (see LICENSE for details)
 
@@ -165,7 +165,6 @@ end
 
 function DevTool.ToUIString(value, name, withoutLineBrakes)
 	local result
-	value = DevTool.normalizeSecretValue(value)
 	local valueType = type(value)
 
 	if valueType == "table" then
@@ -189,9 +188,8 @@ function DevTool.GetObjectInfoFromWoWAPI(helperText, value)
 	-- try to get frame name
 	if ok then
 		local concat = function(str, before, after)
-			before = DevTool.normalizeSecretValue(before) or ""
-			after = DevTool.normalizeSecretValue(after) or ""
-			str = DevTool.normalizeSecretValue(str)
+			before = before or ""
+			after = after or ""
 			if str then
 				return resultStr .. " " .. before .. str .. after
 			end
@@ -212,8 +210,6 @@ function DevTool.GetObjectInfoFromWoWAPI(helperText, value)
 					tostring(DevTool.round(width)) .. ", " ..
 					tostring(DevTool.round(height)) .. "]")
 		end
-
-		name = DevTool.normalizeSecretValue(name)
 
 		if helperText ~= name then
 			resultStr = concat(name, DevTool.colors.gray:WrapTextInColorCode("<"), DevTool.colors.gray:WrapTextInColorCode(">"))
@@ -270,29 +266,22 @@ function DevTool.TryCallFunctionWithArgs(fn, args)
 end
 
 function DevTool.IsMetaTableNode(info)
-	return info.name == "$metatable" or info.name == "$metatable.__index" or (info.name == "__index" and info.parent and info.parent.name == "$metatable")
+	return info.name == "$metatable" or info.name == "$metatable.__index"
 end
 
 function DevTool.GetParentTable(info)
 	local parent = info.parent
-	if parent and (parent.value == _G or parent == DevTool.list) then
-		-- this fn is in global namespace, or has no parent
+	if parent and parent.value == _G then
+		-- this fn is in global namespace so no parent
 		parent = nil
 	end
 
 	if parent then
-		while DevTool.IsMetaTableNode(parent) do
+		if DevTool.IsMetaTableNode(parent) then
 			-- metatable has real object 1 level higher
 			parent = parent.parent
 		end
 	end
 
 	return parent
-end
-
-function DevTool.normalizeSecretValue(value)
-	if (issecrettable and issecrettable(value)) or (issecretvalue and issecretvalue(value)) then
-		return string.format("<SECRET %s>", type(value))
-	end
-	return value
 end
