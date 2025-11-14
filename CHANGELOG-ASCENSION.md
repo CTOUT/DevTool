@@ -34,5 +34,8 @@ This fork adds full compatibility for WotLK 3.3.5 (Project Ascension) while main
 - ✅ Color formatting works
 - ✅ No Lua errors
 
+#### Copyright Attribution
+This fork preserves the original copyright notices "as of fork date" to maintain accurate historical attribution. For current upstream copyright information, please refer to the original repository.
+
 **Upstream:** https://github.com/brittyazel/DevTool  
 **This Fork:** https://github.com/CTOUT/DevTool
